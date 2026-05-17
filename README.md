@@ -1,4 +1,5 @@
-# Pune House Price Predictor : https://house-price-predictor-t.streamlit.app
+# Pune House Price Predictor : 
+https://house-price-predictor-t.streamlit.app
 
 Linear regression for Pune housing prices, **implemented from scratch in NumPy** to demonstrate the fundamentals from Andrew Ng's ML Specialization (Course 1): cost function, batch gradient descent, vectorization, and z-score feature scaling. A scikit-learn baseline is included only to verify the from-scratch implementation is correct.
 

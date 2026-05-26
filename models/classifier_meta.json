@@ -1,0 +1,7 @@
+{
+  "price_threshold": 65.0,
+  "decision_threshold": 0.5,
+  "lam": 0.1,
+  "alpha": 0.1,
+  "iters": 2000
+}

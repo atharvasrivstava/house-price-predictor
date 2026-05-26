@@ -18,6 +18,7 @@ import pandas as pd
 import streamlit as st
 
 from src.linear_regression import LinearRegressionGD
+from src.logistic_regression import LogisticRegressionGD
 from src.preprocess import build_feature_matrix
 from src.scaler import ZScoreScaler
 
@@ -161,6 +162,13 @@ def _accuracy_tier(listed: float, predicted: float) -> tuple[str, str, str]:
 
 
 def render_listing_cards(ranked: pd.DataFrame) -> None:
+    """Render the 2-column card grid.
+
+    If the ranked frame contains a `clf_label` column (0/1), each card also
+    gets a second pill: 'EXPENSIVE ≥ ₹Xl' or 'AFFORDABLE < ₹Xl'.
+    The expected `clf_threshold` (in lakhs) lives in the optional `clf_threshold`
+    column — same value per row, but easier than threading it through args.
+    """
     st.markdown(CARD_CSS, unsafe_allow_html=True)
     rows = ranked.to_dict("records")
     # Render in a 2-column grid
@@ -176,11 +184,27 @@ def render_listing_cards(ranked: pd.DataFrame) -> None:
             bath = int(row.get("bath", 0))
             balcony = int(row.get("balcony", 0))
             area_type = row.get("area_type", "")
+
+            # Optional classifier pill
+            clf_html = ""
+            if "clf_label" in row and pd.notna(row["clf_label"]):
+                threshold = float(row.get("clf_threshold", 100.0))
+                if int(row["clf_label"]) == 1:
+                    clf_bg, clf_ink = PALETTE["accent"], PALETTE["ink"]
+                    clf_text = f"EXPENSIVE ≥ ₹{threshold:.0f}L"
+                else:
+                    clf_bg, clf_ink = PALETTE["surface"], PALETTE["ink"]
+                    clf_text = f"AFFORDABLE < ₹{threshold:.0f}L"
+                clf_html = (
+                    f'<span class="badge" style="background:{clf_bg}; '
+                    f'color:{clf_ink}; margin-left:6px;">{clf_text}</span>'
+                )
+
             with col:
                 st.markdown(
                     f"""
 <div class="listing-card">
-  <span class="badge" style="background:{bg}; color:{ink};">{label}</span>
+  <span class="badge" style="background:{bg}; color:{ink};">{label}</span>{clf_html}
   <div class="title">{row['site_location']} · {int(row['bhk'])} BHK</div>
   <div class="meta">{int(row['total_sqft'])} sqft · {bath} bath · {balcony} balcony{f" · {area_type}" if area_type else ""}</div>
   <div class="price-row"><span class="label">Listed</span><span>₹ {listed:.1f} L</span></div>
@@ -200,7 +224,32 @@ def load_artifacts():
     with open(MODELS_DIR / "feature_columns.json") as f:
         feature_columns = json.load(f)
     df = pd.read_csv(PROCESSED_CSV)
-    return model, scaler, feature_columns, df
+
+    # Classifier is optional — the app degrades gracefully if it hasn't been trained.
+    classifier = None
+    clf_scaler = None
+    clf_meta = None
+    clf_weights_path = MODELS_DIR / "classifier_weights.npz"
+    clf_scaler_path = MODELS_DIR / "classifier_scaler.npz"
+    clf_meta_path = MODELS_DIR / "classifier_meta.json"
+    if clf_weights_path.exists() and clf_scaler_path.exists() and clf_meta_path.exists():
+        classifier = LogisticRegressionGD.load(str(clf_weights_path))
+        clf_scaler = ZScoreScaler.load(str(clf_scaler_path))
+        with open(clf_meta_path) as f:
+            clf_meta = json.load(f)
+
+    return model, scaler, feature_columns, df, classifier, clf_scaler, clf_meta
+
+
+def classify_rows(
+    df_or_row: pd.DataFrame, classifier, clf_scaler, feature_columns, clf_meta
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return (probabilities, predicted labels 0/1) for each row."""
+    X, _, _ = build_feature_matrix(df_or_row, feature_columns=feature_columns)
+    X_s = clf_scaler.transform(X)
+    proba = classifier.predict_proba(X_s)
+    label = (proba >= clf_meta.get("decision_threshold", 0.5)).astype(int)
+    return proba, label
 
 
 def predict_price(model, scaler, feature_columns, user_row: dict) -> float:
@@ -221,13 +270,15 @@ def main():
     )
 
     try:
-        model, scaler, feature_columns, df = load_artifacts()
+        model, scaler, feature_columns, df, classifier, clf_scaler, clf_meta = load_artifacts()
     except FileNotFoundError:
         st.error(
             "Model artifacts not found. Train the model first:\n\n"
             "    python -m src.train --csv data/raw/pune_houses.csv"
         )
         return
+
+    classifier_ready = classifier is not None and clf_scaler is not None and clf_meta is not None
 
     localities = sorted(df["site_location"].unique().tolist())
     area_types = sorted(df["area_type"].unique().tolist()) if "area_type" in df.columns else []
@@ -256,10 +307,27 @@ def main():
 
     if predict_clicked or True:  # always show a prediction
         predicted = predict_price(model, scaler, feature_columns, user_row)
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Predicted price", f"₹ {predicted:.1f} L")
-        col2.metric("Per sqft", f"₹ {predicted * 1e5 / total_sqft:,.0f}")
-        col3.metric("Locality avg (sqft)", f"₹ {df.loc[df['site_location'] == locality, 'price'].mean() * 1e5 / df.loc[df['site_location'] == locality, 'total_sqft'].mean():,.0f}" if (df['site_location'] == locality).any() else "—")
+        if classifier_ready:
+            cols = st.columns(4)
+            user_proba, user_label = classify_rows(
+                pd.DataFrame([user_row]), classifier, clf_scaler, feature_columns, clf_meta
+            )
+            threshold = clf_meta["price_threshold"]
+            verdict = "Expensive" if int(user_label[0]) == 1 else "Affordable"
+            cols[3].metric(
+                f"Class (₹{threshold:.0f}L cutoff)",
+                verdict,
+                f"p = {float(user_proba[0]):.2f}",
+            )
+        else:
+            cols = st.columns(3)
+        cols[0].metric("Predicted price", f"₹ {predicted:.1f} L")
+        cols[1].metric("Per sqft", f"₹ {predicted * 1e5 / total_sqft:,.0f}")
+        cols[2].metric(
+            "Locality avg (sqft)",
+            f"₹ {df.loc[df['site_location'] == locality, 'price'].mean() * 1e5 / df.loc[df['site_location'] == locality, 'total_sqft'].mean():,.0f}"
+            if (df['site_location'] == locality).any() else "—",
+        )
 
     # ----- Matching listings -----
     header_col, filter_col = st.columns([3, 1], gap="medium")
@@ -275,11 +343,23 @@ def main():
     if candidates.empty:
         st.info("No listings match this locality + BHK range in the dataset.")
     else:
-        # Predict for every candidate row
+        # Predict for every candidate row (regressor)
         X_cand, _, _ = build_feature_matrix(candidates, feature_columns=feature_columns)
         X_cand_s = scaler.transform(X_cand)
         candidates["predicted_price"] = model.predict(X_cand_s)
         candidates["delta"] = candidates["price"] - candidates["predicted_price"]
+
+        # Ground-truth Expensive/Affordable label for every candidate row.
+        # We use the *actual listed price* here (not the classifier's prediction)
+        # because the cards display the listed price right next to the badge,
+        # so a feature-based prediction looks contradictory when the listing is
+        # an outlier for its locality. The classifier still earns its keep in
+        # the top prediction panel, where the user's hypothetical house has no
+        # known price.
+        if classifier_ready:
+            threshold = clf_meta["price_threshold"]
+            candidates["clf_label"] = (candidates["price"] > threshold).astype(int)
+            candidates["clf_threshold"] = threshold
 
         # Drop listings where the model is wildly off — these are almost
         # always dataset noise (typos, unusual sales) rather than real deals,

@@ -1,6 +1,12 @@
 # Pune House Price Predictor : 
 https://house-price-predictor-t.streamlit.app
 
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-Streamlit-FF4B4B?logo=streamlit&logoColor=white)](https://house-price-predictor-t.streamlit.app)
+[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://www.python.org)
+[![NumPy](https://img.shields.io/badge/Built%20with-NumPy-013243?logo=numpy&logoColor=white)](https://numpy.org)
+
+**🔗 Try it live:** https://house-price-predictor-t.streamlit.app
+
 Linear regression for Pune housing prices, **implemented from scratch in NumPy** to demonstrate the fundamentals from Andrew Ng's ML Specialization (Course 1): cost function, batch gradient descent, vectorization, and z-score feature scaling. A scikit-learn baseline is included only to verify the from-scratch implementation is correct.
 
 A Streamlit UI takes user preferences (locality, BHK, bathrooms, sqft) and returns:
@@ -17,6 +23,8 @@ A Streamlit UI takes user preferences (locality, BHK, bathrooms, sqft) and retur
 | Batch gradient descent | `LinearRegressionGD.fit` in [src/linear_regression.py](src/linear_regression.py) |
 | Z-score feature scaling | [src/scaler.py](src/scaler.py)                            |
 | Train/test split       | `train_test_split` in [src/train.py](src/train.py) (NumPy permutation) |
+| Sigmoid + BCE cost + L2 (Week 3) | `sigmoid`, `compute_cost`, `compute_gradients` in [src/logistic_regression.py](src/logistic_regression.py) |
+| Logistic regression GD | `LogisticRegressionGD` in [src/logistic_regression.py](src/logistic_regression.py) |
 
 ## Project layout
 
@@ -50,18 +58,23 @@ Expected columns: `area_type, availability, site_location` (or `location`), `siz
 ## Train
 
 ```bash
+# Regressor (Course 1 Weeks 1–2)
 python -m src.train --csv data/raw/pune_houses.csv
+
+# Classifier (Course 1 Week 3) — must run AFTER the regressor
+python -m src.train_classifier
 ```
 
-This writes `models/weights.npz`, `models/scaler.npz`, `models/feature_columns.json`, and `data/processed/pune_clean.csv`.
+The regressor writes `models/weights.npz`, `models/scaler.npz`, `models/feature_columns.json`, and `data/processed/pune_clean.csv`. The classifier writes `models/classifier_weights.npz`, `models/classifier_scaler.npz`, and `models/classifier_meta.json` and labels listings as **Expensive (> ₹100L)** vs **Affordable** with L2-regularized logistic regression.
 
 ## Verify against scikit-learn
 
 ```bash
-python -m src.evaluate --csv data/raw/pune_houses.csv
+python -m src.evaluate --csv data/raw/pune_houses.csv          # regressor
+python -m src.evaluate_classifier                              # classifier
 ```
 
-Prints MAE / RMSE / R² for both the from-scratch model and `sklearn.linear_model.LinearRegression`. The metrics should match closely — the proof that the from-scratch implementation is correct.
+`src.evaluate` prints MAE / RMSE / R² for both the from-scratch model and `sklearn.linear_model.LinearRegression`. `src.evaluate_classifier` prints accuracy / precision / recall / F1 for the from-scratch classifier and `sklearn.linear_model.LogisticRegression`. Metrics should match closely — the proof both from-scratch implementations are correct.
 
 ## Generate diagnostic plots
 
